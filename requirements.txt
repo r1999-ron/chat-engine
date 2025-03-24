@@ -1,0 +1,8 @@
+Flask
+flask-cors
+requests
+pydub
+speechrecognition
+twilio
+datetime
+pydub
