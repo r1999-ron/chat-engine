@@ -7,15 +7,21 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from pydub import AudioSegment  # For handling audio files
 from twilio.twiml.messaging_response import MessagingResponse
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
 app = Flask(__name__)
 
 # SQLite database setup
 DATABASE = "employees.db"  # Replace with your actual database file name
 
 # Twilio WhatsApp Sandbox number
-TWILIO_WHATSAPP_NUMBER = "whatsapp:+14132321246"
-API_URL = "https://4bfb-2401-4900-1cb2-8c47-60ed-23ee-446f-d0f3.ngrok-free.app/query"
+TWILIO_WHATSAPP_NUMBER = TWILIO_WHATSAPP_NUMBER
+API_URL = "https://4162-49-205-242-177.ngrok-free.app/query"
 
 # Speech-to-text recognizer
 recognizer = sr.Recognizer()
@@ -82,8 +88,8 @@ def add_attendance(employee_id, today, status):
 # Download audio file from Twilio
 def download_audio(media_url):
     try:
-        account_sid = "AC2366adb9179ea82368531bc222b0ddf0"  # Replace with your Twilio Account SID
-        auth_token = "acd5c5ba7603095cb06f26f8ebee6be6"  # Replace with your Twilio Auth Token
+        account_sid = TWILIO_ACCOUNT_SID  # Replace with your Twilio Account SID
+        auth_token = TWILIO_AUTH_TOKEN  # Replace with your Twilio Auth Token
         response = requests.get(media_url, auth=(account_sid, auth_token))
         response.raise_for_status()
         audio_file_path = "temp_audio.ogg"
