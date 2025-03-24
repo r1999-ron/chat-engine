@@ -1,0 +1,9 @@
+services:
+  - name: flask-chat-engine
+    type: web
+    env: python
+    plan: free
+    buildCommand: |
+      pip install --upgrade pip
+      pip install --no-cache-dir -r requirements.txt
+    startCommand: gunicorn main:app --bind 0.0.0.0:5000
