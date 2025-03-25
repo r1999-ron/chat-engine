@@ -21,7 +21,7 @@ DATABASE = "employees.db"  # Replace with your actual database file name
 
 # Twilio WhatsApp Sandbox number
 TWILIO_WHATSAPP_NUMBER = TWILIO_WHATSAPP_NUMBER
-API_URL = "https://4162-49-205-242-177.ngrok-free.app/query"
+API_URL = "https://4bfb-2401-4900-1cb2-8c47-60ed-23ee-446f-d0f3.ngrok-free.app/query"
 
 # Speech-to-text recognizer
 recognizer = sr.Recognizer()
