@@ -14,6 +14,8 @@ load_dotenv()
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
+API_URL = os.getenv("API_URL")
+
 app = Flask(__name__)
 
 # SQLite database setup
@@ -21,7 +23,6 @@ DATABASE = "employees.db"  # Replace with your actual database file name
 
 # Twilio WhatsApp Sandbox number
 TWILIO_WHATSAPP_NUMBER = TWILIO_WHATSAPP_NUMBER
-API_URL = "https://4bfb-2401-4900-1cb2-8c47-60ed-23ee-446f-d0f3.ngrok-free.app/query"
 
 # Speech-to-text recognizer
 recognizer = sr.Recognizer()
