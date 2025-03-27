@@ -54,7 +54,7 @@ def get_employees(phone_number):
     params = {"phone": f"{phone_number}"}  # Optional filter
     headers = {"x-api-key": "abcdef"}
 
-    response = requests.get(url, params=params, headers=headers)
+    response = requests.post(url, params=params, headers=headers)
     if response.status_code == 200:
         return response.json()
     else:
