@@ -1,15 +1,16 @@
 import re
 from datetime import datetime
-
 import requests
-import speech_recognition as sr  # For converting audio to text
+import speech_recognition as sr
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-from pydub import AudioSegment  # For handling audio files
+from pydub import AudioSegment
 from twilio.twiml.messaging_response import MessagingResponse
 from dotenv import load_dotenv
 import os
+from gtts import gTTS
 
+# Load environment variables
 load_dotenv()
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
@@ -17,29 +18,26 @@ TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
 API_URL = os.getenv("API_URL")
 
 app = Flask(__name__)
+CORS(app, supports_credentials=True)
 
-# SQLite database setup
-DATABASE = "employees.db"  # Replace with your actual database file name
-
-# Twilio WhatsApp Sandbox number
-TWILIO_WHATSAPP_NUMBER = TWILIO_WHATSAPP_NUMBER
+# Database configuration
+DATABASE = "employees.db"
 
 # Speech-to-text recognizer
 recognizer = sr.Recognizer()
 
-CORS(app, supports_credentials=True)
-
 
 def execute_query(query):
+    """Execute SQL query through API"""
     payload = {"query": query}
     headers = {"Content-Type": "application/json", "x-api-key": "abcdef"}
 
     try:
-        response = requests.post(API_URL, json=payload, headers=headers)
+        response = requests.post(API_URL + "/query", json=payload, headers=headers)
         response_data = response.json()
 
         if response.status_code == 200:
-            return response_data  # Successfully executed query (SELECT or other)
+            return response_data
         else:
             print("Error:", response_data.get("error"))
             return None
@@ -48,63 +46,319 @@ def execute_query(query):
         return None
 
 
-# Check if the phone number exists in the employee table
-def get_employee(phone_number):
-    print(phone_number)
-    phone_number = phone_number[-10:]  # Extract the last 10 digits
-    query_result = execute_query(f"SELECT * FROM employee WHERE phone LIKE '%{phone_number}%'")
-    print(query_result)
-    return query_result
+def get_employees(phone_number):
+    """Get employee details by phone number"""
+    phone_number = phone_number[-10:]  # Extract last 10 digits
+
+    url = API_URL + "/employees"
+    params = {"phone": f"{phone_number}"}  # Optional filter
+    headers = {"x-api-key": "abcdef"}
+
+    response = requests.get(url, params=params, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Error: No employee found with this phone number {phone_number}")
 
 
 def get_attendance(employee_id, date_to_mark):
-    if '\'' in date_to_mark:
-        date_to_mark = date_to_mark.replace('\'', '')
-    query_result = execute_query(
-        f"SELECT status FROM attendance WHERE empId={employee_id} and date='{date_to_mark}'")
-    print(query_result)
-    return query_result[0]["status"] if query_result else None
+    url = API_URL + f"/{employee_id}/attendance_by_date"
+    headers = {"x-api-key": "abcdef"}
+    params = {"date": date_to_mark}
+
+    response = requests.post(url, headers=headers, params=params)
+    return response.json()
 
 
 def add_attendance(employee_id, today, status):
-    # Ensure the date is properly formatted for SQL
-    today = f"'{today}'"  # Wrap in single quotes for SQL
+    # Convert the date string to datetime object for validation
+    datetime_obj = datetime.strptime(today, "%Y-%m-%d")
+    # Convert back to string for JSON serialization
+    date_str = datetime_obj.strftime("%Y-%m-%d")
 
-    # Check if the attendance record already exists
-    query_result = get_attendance(employee_id, today)
+    url = API_URL + "/attendance"
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": "abcdef"
+    }
+    data = {
+        "empId": employee_id,
+        "date": date_str,  # Now using string instead of datetime object
+        "status": status
+    }
 
-    print(query_result)  # Debugging: Prints the query result
-
-    if query_result:
-        execute_query(
-            f"UPDATE attendance SET status='{status}' WHERE empId={employee_id} AND date={today}"
-        )
-    else:
-        execute_query(
-            f"INSERT INTO attendance (empId, date, status) VALUES ({employee_id}, {today}, '{status}')"
-        )
-    return status  # Return the inserted status
-
-
-# Download audio file from Twilio
-def download_audio(media_url):
     try:
-        account_sid = TWILIO_ACCOUNT_SID  # Replace with your Twilio Account SID
-        auth_token = TWILIO_AUTH_TOKEN  # Replace with your Twilio Auth Token
-        response = requests.get(media_url, auth=(account_sid, auth_token))
+        response = requests.post(url, json=data, headers=headers)
+        response.raise_for_status()  # Raises an HTTPError for bad responses
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error marking attendance: {e}")
+        return None
+
+
+def get_attendance_filter(emp_id, days=None, from_date=None, to_date=None):
+    """
+    Calls the attendance API endpoint
+
+    Args:
+        emp_id: Employee ID (integer)
+        days: Number of days to look back (optional)
+        from_date: Start date as 'YYYY-MM-DD' string (optional)
+        to_date: End date as 'YYYY-MM-DD' string (optional)
+
+    Returns:
+        Dictionary with attendance data and leave statistics
+    """
+    # Prepare headers with authentication
+    headers = {
+        "x-api-key": "abcdef",
+        "Content-Type": "application/json"
+    }
+
+    # Build query parameters
+    params = {}
+    if days:
+        params["days"] = days
+    if from_date:
+        params["from"] = from_date
+    if to_date:
+        params["to"] = to_date
+
+    # Make the POST request
+    response = requests.post(
+        f"{API_URL}/attendance/{emp_id}",
+        headers=headers,
+        params=params
+    )
+
+    # Handle response
+    if response.status_code == 200:
+        return response.json()
+    else:
+        response.raise_for_status()  # Raises exception for 4XX/5XX errors
+
+
+def format_calendar(data):
+    # Collect all dates with their status
+    date_status = {}
+    for status, dates in data["attendance"].items():
+        for date in dates:
+            date_status[date] = status
+
+    # Group by month
+    months = {}
+    for date_str in sorted(date_status.keys()):
+        date = datetime.strptime(date_str, "%Y-%m-%d")
+        month_key = date.strftime("%Y-%m")
+        if month_key not in months:
+            months[month_key] = []
+        months[month_key].append((date.day, date_status[date_str]))
+
+    # Build calendar
+    calendar = []
+    for month, days in months.items():
+        month_header = datetime.strptime(month, "%Y-%m").strftime("%B %Y")
+        calendar.append(f"\n📅 {month_header}")
+        calendar.append("Su Mo Tu We Th Fr Sa")
+
+        # Find first day of month
+        first_date = datetime.strptime(f"{month}-01", "%Y-%m-%d")
+        first_weekday = first_date.weekday()  # Monday is 0
+
+        # Add leading spaces
+        week = ["  "] * first_weekday
+
+        for day, status in days:
+            # Emoji representation
+            emoji = {
+                "PRESENT": "✅",
+                "ABSENT": "❌",
+                "WFH": "🏠"
+            }.get(status, " ")
+
+            week.append(f"{emoji}{day:2}")
+
+            # New week
+            if len(week) == 7:
+                calendar.append(" ".join(week))
+                week = []
+
+        if week:  # Add remaining days
+            calendar.append(" ".join(week))
+
+    return "\n".join(calendar)
+
+
+def get_my_requests(employee_id, status="", request_type="all"):
+    api_url = API_URL + "/employees/{}/requests".format(employee_id)
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": "abcdef"  # Your API key
+    }
+
+    params = {"type": request_type}
+    response = requests.post(api_url, headers=headers, params=params)
+
+    if response.status_code == 200:
+        total_requests = response.json()
+
+        # Filter by status if status parameter is not empty
+        if status:
+            filtered_requests = [
+                req for req in total_requests
+                if req['requestStatus'] == status.upper()
+            ]
+            print(f"Filtered requests (status={status}):", filtered_requests)
+            return filtered_requests
+        else:
+            print("All requests:", total_requests)
+            return total_requests
+    else:
+        print("Error:", response.json())
+        return None
+
+
+def update_request_status(request_id, new_status, user_id, api_key="abcdef"):
+    """
+    Update the status of a request approval
+
+    Args:
+        request_id: ID of the request to update
+        new_status: New status (APPROVED/REJECTED/PENDING)
+        api_key: API key for authentication
+
+    Returns:
+        Dictionary with response data if successful, None if failed
+    """
+    api_url = f"{API_URL}/request-approvals/{request_id}"
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key
+    }
+
+    data = {
+        "requestStatus": new_status.upper(),
+        "userId": user_id
+    }
+
+    try:
+        response = requests.put(api_url, json=data, headers=headers)
+
+        if response.status_code == 200:
+            print("Request status updated successfully")
+            return response.json()
+        else:
+            print(f"Error updating request: {response.status_code}", response.json())
+            return None
+
+    except Exception as e:
+        print(f"Request failed: {str(e)}")
+        return None
+
+
+def parse_leave_request(message: str) -> tuple:
+    """
+    Parse leave/WFH request from message
+    Format: "[WFH/LEAVE] from yyyy-mm-dd to yyyy-mm-dd"
+    Returns: (request_type, from_date, to_date) or (None, None, None) if invalid
+    """
+    pattern = r"^(wfh|leave)\s+from\s+(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})$"
+    match = re.match(pattern, message.lower())
+    if not match:
+        return None, None, None
+
+    request_type = match.group(1).upper()  # "WFH" or "LEAVE"
+    from_date = match.group(2)
+    to_date = match.group(3)
+
+    # Validate dates
+    try:
+        datetime.strptime(from_date, "%Y-%m-%d")
+        datetime.strptime(to_date, "%Y-%m-%d")
+        return request_type, from_date, to_date
+    except ValueError:
+        return None, None, None
+
+
+def create_request_approval(
+        emp_id: int,
+        request_type: str,
+        from_date: str,  # YYYY-MM-DD format
+        to_date: str,    # YYYY-MM-DD format
+        api_key: str = "abcdef"
+):
+    """
+    Create a new request approval (LEAVE/WFH)
+
+    Args:
+        emp_id: Employee ID making the request
+        request_type: 'LEAVE' or 'WFH'
+        from_date: Start date (YYYY-MM-DD)
+        to_date: End date (YYYY-MM-DD)
+        api_key: API key for authentication
+        base_url: Base URL of the API service
+
+    Returns:
+        Dictionary with response data or error message
+    """
+    url = f"{API_URL}/request-approvals"
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key
+    }
+
+    data = {
+        "empId": emp_id,
+        "requestType": request_type.upper(),
+        "fromDate": from_date,
+        "toDate": to_date
+    }
+
+    try:
+        response = requests.post(url, json=data, headers=headers)
+        response.raise_for_status()  # Raises exception for 4XX/5XX responses
+        return response.json()
+
+    except requests.exceptions.HTTPError as http_err:
+        # Handle API-specific error messages
+        try:
+            error_data = response.json()
+            return {
+                "success": False,
+                "error": error_data.get("error", "Unknown error"),
+                "details": error_data
+            }
+        except:
+            return {
+                "success": False,
+                "error": str(http_err)
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def download_audio(media_url):
+    """Download audio file from Twilio"""
+    try:
+        response = requests.get(media_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
         response.raise_for_status()
         audio_file_path = "temp_audio.ogg"
         with open(audio_file_path, "wb") as f:
             f.write(response.content)
-        print(f"Audio file downloaded: {audio_file_path}")
         return audio_file_path
     except Exception as e:
         print(f"Error downloading audio file: {e}")
         return None
 
 
-# Convert audio to text
 def convert_audio_to_text(audio_file_path):
+    """Convert audio to text using Google Speech Recognition"""
     try:
         audio = AudioSegment.from_file(audio_file_path)
         wav_file_path = "temp_audio.wav"
@@ -112,83 +366,334 @@ def convert_audio_to_text(audio_file_path):
         with sr.AudioFile(wav_file_path) as source:
             audio_data = recognizer.record(source)
             text = recognizer.recognize_google(audio_data)
-        print(f"Converted audio to text: {text}")
         return text
     except Exception as e:
         print(f"Error converting audio to text: {e}")
         return None
 
 
-# Call Ronak's service
-def call_docuseek_api(message):
-    # API endpoint
-    url = "https://information-retrieval-service.onrender.com/query"
+def text_to_speech(text):
+    """Convert text to speech audio file"""
+    try:
+        tts = gTTS(text=text, lang='en')
+        audio_path = "reply.mpeg"
+        tts.save(audio_path)
+        return audio_path
+    except Exception as e:
+        print(f"Error in text-to-speech: {e}")
+        return None
 
-    # Headers
+
+def upload_audio_file(file_path):
+    """Upload audio file to temporary hosting service"""
+    try:
+        files = {'file': open(file_path, 'rb')}
+        response = requests.post('https://tmpfiles.org/api/v1/upload', files=files)
+        print(f"Response from audio file {response.json()['data']}")
+        if response.status_code == 200:
+            return response.json()['data']['url']
+        return None
+    except Exception as e:
+        print(f"Error uploading audio file: {e}")
+        return None
+
+
+def call_docuseek_api(message, employee_type):
+    """Call external API for document search"""
+    url = f"https://information-retrieval-service.onrender.com/query?employee_type={employee_type}"
     headers = {
         "token": "abcdef",
         "Content-Type": "application/json"
     }
+    data = {"question": message}
 
-    # Request payload
-    data = {
-        "question": message
-
-    }
     response = requests.post(url, json=data, headers=headers)
-    # Extracting the "answer" field
     if response.status_code == 200:
-        response_json = response.json()
-        answer = response_json.get("answer", "No answer found")  # Default if key is missing
-        return answer
+        return response.json().get("answer", "No answer found")
     else:
         print(f"Error: {response.status_code}, {response.text}")
-        return response.json()
+        return None
+
+
+def process_attendance_message(message):
+    # Normalize the message (remove extra spaces, make uppercase)
+    message = message.strip().upper()
+
+    # Define patterns to match
+    patterns = [
+        r'^(PRESENT|ABSENT|WFH)\s*(\d{4}-\d{2}-\d{2})?$',  # "PRESENT" or "PRESENT 2023-12-15"
+        r'^(PRESENT|ABSENT|WFH)(\d{4}-\d{2}-\d{2})$'  # "PRESENT2023-12-15"
+    ]
+
+    status = None
+    date = None
+
+    for pattern in patterns:
+        match = re.match(pattern, message)
+        if match:
+            status = match.group(1)
+            date_str = match.group(2) if len(match.groups()) > 1 else None
+            break
+
+    if not status:
+        return None, None  # Invalid format
+
+    # Set default date to today if not provided
+    date = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else datetime.today().date()
+
+    return status, date.strftime("%Y-%m-%d")
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # Validate API Key via Query Parameter
+    """Main webhook handler for Twilio WhatsApp messages"""
+    # Validate API Key
     api_key = request.args.get("x_api_key")
     if api_key != "abcdef":
         return jsonify({"error": "Unauthorized"}), 401
-    incoming_message = request.form.get("Body")
-    sender_number = request.form.get("From")
+
+    # Get incoming message details
+    incoming_message = request.form.get("Body", "")
+    sender_number = request.form.get("From", "")
     num_media = int(request.form.get("NumMedia", 0))
+    is_audio_received = num_media > 0 and request.form.get("MediaContentType0", "").startswith("audio/")
 
     print(f"Received message: {incoming_message} from {sender_number}")
 
-    employee = get_employee(sender_number[-10:])
+    # Check employee authorization
+    employee = get_employees(sender_number[-10:])
     if not employee:
         return str(MessagingResponse().message("You are not authorized to use this service."))
-
+    print("employee", employee[0])
+    employee_type = employee[0].get("employeeType")
     final_message = incoming_message
-    if num_media > 0:
-        media_url = request.form.get("MediaUrl0")
-        media_type = request.form.get("MediaContentType0")
-        if media_type.startswith("audio/"):
-            print("Received an audio message.")
-            audio_file_path = download_audio(media_url)
-            if audio_file_path:
-                final_message = convert_audio_to_text(audio_file_path)
-                print("Converted audio file to text. ", final_message)
 
+    # Handle audio messages
+    if is_audio_received:
+        media_url = request.form.get("MediaUrl0")
+        audio_file_path = download_audio(media_url)
+        if audio_file_path:
+            final_message = convert_audio_to_text(audio_file_path) or incoming_message
+            print("Converted audio to text:", final_message)
+
+    # Process different message types
     if "today" in final_message.lower() and "attendance" in final_message.lower():
         today = datetime.today().strftime("%Y-%m-%d")
         employee_id = employee[0].get("id")
-        attendance_status = get_attendance(employee_id, date_to_mark=today)
-        print(attendance_status)
-        if attendance_status:
-            reply = f"Your attendance for today ({today}) is: {attendance_status}"
+        attendance_status = get_attendance(employee_id, today)
+        reply = f"Your attendance for today ({today}) is: {attendance_status}" if attendance_status else f"No record found for {today}"
+
+    elif any(keyword in final_message.upper() for keyword in ["PRESENT", "ABSENT", "WFH"]) and "from" not in final_message.lower() and "to" not in final_message.lower():
+        status, date = process_attendance_message(final_message)
+
+        if not status:
+            reply = "Invalid attendance format. Use: PRESENT/ABSENT/WFH [YYYY-MM-DD]"
         else:
-            reply = f"No record found for {today}"
-    elif final_message.strip().upper() in ["PRESENT", "ABSENT"]:
-        today = datetime.today().strftime("%Y-%m-%d")
+            employee_id = employee[0].get("id")
+            attendance = add_attendance(employee_id, date, status)
+
+            if attendance:
+                reply = f"Marked {status} for {date}"
+            else:
+                reply = "Failed to mark attendance"
+
+    elif final_message.lower().startswith("my attendance"):
         employee_id = employee[0].get("id")
-        attendance_status = add_attendance(employee_id, today, final_message.strip().upper())
-        reply = f"Attendance recorded: {attendance_status}"
+        date_parts = final_message.split()
+        from_index = date_parts.index("from")
+        to_index = date_parts.index("to")
+
+        from_date = date_parts[from_index + 1]
+        to_date = date_parts[to_index + 1]
+
+        reply = format_calendar(get_attendance_filter(emp_id=employee_id, from_date=from_date, to_date=to_date))
+
+    elif final_message.lower() == "my request history":
+        employee_id = employee[0].get("id")
+
+        request_raised_by_me = get_my_requests(employee_id, "", "created")
+
+        if request_raised_by_me:
+            request_list = "\n".join(
+                f"{req['id']}: {req['requestType']} ({req['fromDate']} to {req['toDate']}) - {req['requestStatus']}"
+                for req in request_raised_by_me
+            )
+            reply = (
+                "requests raised by me:\n"
+                f"{request_list}\n\n"
+            )
+        else:
+            reply = "No requests raised by me"
+
+    elif final_message.lower() == "my active request":
+        employee_id = employee[0].get("id")
+
+        active_request_raised_by_me = get_my_requests(employee_id, "PENDING", "created")
+
+        if active_request_raised_by_me:
+            request_list = "\n".join(
+                f"{req['id']}: {req['requestType']} ({req['fromDate']} to {req['toDate']}) - {req['requestStatus']}"
+                for req in active_request_raised_by_me
+            )
+            reply = (
+                "active requests raised by me:\n"
+                f"{request_list}\n\n"
+            )
+        else:
+            reply = "No active requests raised by me"
+
+    elif final_message.lower() == "request on me":
+        employee_id = employee[0].get("id")
+
+        requests_on_me = get_my_requests(employee_id, "", "approval")
+
+        if requests_on_me:
+            request_list = "\n".join(
+                f"{req['id']}: {req['requestType']} ({req['fromDate']} to {req['toDate']}) - {req['requestStatus']}"
+                for req in requests_on_me
+            )
+            reply = (
+                "Requests raised to you:\n"
+                f"{request_list}\n\n"
+                "Reply with 'accept request <ID>' to approve"
+            )
+        else:
+            reply = "No requests require your approval"
+
+    elif final_message.lower() == "active request on me":
+        employee_id = employee[0].get("id")
+
+        pending_requests_on_me = get_my_requests(employee_id, "PENDING", "approval")
+
+        if pending_requests_on_me:
+            request_list = "\n".join(
+                f"{req['id']}: {req['requestType']} ({req['fromDate']} to {req['toDate']}) - {req['requestStatus']}"
+                for req in pending_requests_on_me
+            )
+            reply = (
+                "Pending requests needing approval:\n"
+                f"{request_list}\n\n"
+                "Reply with 'accept request <ID>' to approve"
+            )
+        else:
+            reply = "No pending requests require your approval"
+
+    elif final_message.lower().startswith("accept request"):
+
+        parts = final_message.lower().split()
+        employee_id = employee[0].get("id")
+
+        if len(parts) > 2:  # "accept request 123"
+            try:
+                request_id = int(parts[2])
+                result = update_request_status(
+                    request_id=request_id,
+                    new_status="APPROVED",
+                    user_id=employee_id
+                )
+                print(f"Updated request status: {result}")
+
+                if result and result.get("success", True):
+                    reply = f"Request {request_id} approved successfully"
+                else:
+                    reply = "Failed to approve request"
+
+            except ValueError:
+                reply = "Invalid request ID. Please use format 'accept request <ID>'"
+
+        else:  # Just "accept request"
+            pending_requests_on_me = get_my_requests(
+                employee_id=employee_id,
+                status="PENDING",
+                request_type="approval"
+            )
+
+            if pending_requests_on_me:
+                request_list = "\n".join(
+                    f"{req['id']}: {req['requestType']} ({req['fromDate']} to {req['toDate']})"
+                    for req in pending_requests_on_me
+                )
+                reply = (
+                    "Pending requests needing approval:\n"
+                    f"{request_list}\n\n"
+                    "Reply with 'accept request <ID>' to approve"
+                )
+            else:
+                reply = "No pending requests require your approval"
+
+    elif final_message.lower().startswith("reject request"):
+        parts = final_message.lower().split()
+        employee_id = employee[0].get("id")
+
+        if len(parts) > 2:  # "accept request 123"
+            try:
+                request_id = int(parts[2])
+                result = update_request_status(
+                    request_id=request_id,
+                    new_status="REJECTED",
+                    user_id=employee_id
+                )
+                print(f"Updated request status: {result}")
+
+                if result and result.get("success", True):
+                    reply = f"Request {request_id} rejected successfully"
+                else:
+                    reply = "Failed to reject request"
+
+            except ValueError:
+                reply = "Invalid request ID. Please use format 'reject request <ID>'"
+
+        else:  # Just "reject request"
+            pending_requests_on_me = get_my_requests(
+                employee_id=employee_id,
+                status="PENDING",
+                request_type="approval"
+            )
+
+            if pending_requests_on_me:
+                request_list = "\n".join(
+                    f"{req['id']}: {req['requestType']} ({req['fromDate']} to {req['toDate']})"
+                    for req in pending_requests_on_me
+                )
+                reply = (
+                    "Pending requests needing approval:\n"
+                    f"{request_list}\n\n"
+                    "Reply with 'accept request <ID>' to approve"
+                )
+            else:
+                reply = "No pending requests require your approval"
+
+    elif final_message.lower().startswith(("wfh", "leave")) and "from" in final_message.lower() and "to" in final_message.lower():
+        request_type, from_date, to_date = parse_leave_request(final_message)
+
+        if not request_type:
+            reply = "Invalid format. Use: '[WFH/LEAVE] from yyyy-mm-dd to yyyy-mm-dd'"
+        else:
+            employee_id = employee[0].get("id")
+            result = create_request_approval(
+                emp_id=employee_id,
+                request_type=request_type,
+                from_date=from_date,
+                to_date=to_date
+            )
+
+            if result.get("success", True):
+                reply = (
+                    f"{request_type.capitalize()} request submitted!\n"
+                    f"From: {from_date}\n"
+                    f"To: {to_date}\n"
+                    f"Request ID: {result.get('requestId')}"
+                )
+            else:
+                reply = f"Failed to submit request: {result.get('error')}"
+                if "conflictDates" in result.get("details", {}):
+                    reply += f"\nConflicts on: {', '.join(result['details']['conflictDates'])}"
+                elif "leaves_taken" in result.get("details", {}):
+                    remaining = 15 - result["details"]["leaves_taken"] - result["details"]["pending_leaves"]
+                    reply += f"\nYou have only {remaining} leave days remaining"
+
     else:
-        if final_message.strip().lower().startswith("custom") and "manager" in employee[0].get("role").lower():
+        if final_message.strip().lower().startswith("custom") and "manager" in employee[0].get("role", "").lower():
             final_message = re.sub(r'(?i)custom', '', final_message)
             sql_message = (
                 f"you are a SQL expert for writing queries in sqlite3 python, always write query case insensitive, "
@@ -196,52 +701,49 @@ def webhook():
                 f"I can directly fire in DB. You have the Employee and Attendance table information: "
                 f"Employee with columns (id, name, email, phone, role (engineer, HR, tester, manager, and founder), "
                 f"level (integer 1,2,3), reportsTo (id of manager who is also an employee), skills (string)); "
-                f"Attendance with columns (id, empId, date(yyyy-mm-dd), status(PRESENT/ABSENT)). if you are using "
-                f"CURRENT_DATE() for date in Attendance table use yyyy-mm-dd as date, if today then today's date in "
-                f"yyyy-mm-dd. Make sure you just return the query if you can"
-                f"think of one, or just return NotSure if you are not able to make sql query for - write a SQL query to "
-                f"{final_message}")
-            response_from_service_b = call_docuseek_api(sql_message)
-            print(f"AI's response for query {response_from_service_b}")
-            query = re.search(r"```sql\s*(.*?)\s*```", response_from_service_b, re.DOTALL)
+                f"Attendance with columns (id, empId, date(yyyy-mm-dd), status(PRESENT/ABSENT)).")
+            response_from_service_b = call_docuseek_api(sql_message, employee_type)
+            query = re.search(r"```sql\s*(.*?)\s*```", response_from_service_b or "", re.DOTALL)
             if query:
                 query = query.group(1).strip()
-                print(f"final sql query {query}")
-            query = " ".join(query.split())
-            print(f"Query after removing new lines {query}")
-            if not "notsure" in query.lower():
-                result = execute_query(query)
-                # final_response = call_ronak_api(
-                #      f"Answer {final_message} from result {result}")
-                # print(final_response)
-                # reply = final_response if final_response else "Oops, currently I don't have that information."
-                reply = f"Your result is \n {result}"
+                query = " ".join(query.split())
+                if "notsure" not in query.lower():
+                    result = execute_query(query)
+                    reply = f"Your result is \n {result}" if result else "Query execution failed"
+            else:
+                reply = "Could not generate proper SQL query"
         else:
-            response_from_service_b = call_docuseek_api(final_message)
-            print(response_from_service_b)
-            reply = response_from_service_b if response_from_service_b else "Oops, currently I don't have that information."
+            response_from_service_b = call_docuseek_api(final_message, employee_type)
+            print("Response from service:", response_from_service_b)
+            reply = response_from_service_b or "Oops, currently I don't have that information."
 
-    try:
-        print("Reply:", reply)
+    # Prepare response - audio if received audio, otherwise text
+    twiml_response = MessagingResponse()
 
-        # Create a TwiML response
-        twiml_response = MessagingResponse()
-        twiml_response.message(body=reply)
+    if is_audio_received:
+        audio_path = text_to_speech(reply)
+        print(f"Audio path: {audio_path}")
+        if audio_path:
+            audio_url = upload_audio_file(audio_path)
+            if audio_url:
+                twiml_response.message().media(audio_url)
+                # Clean up temporary files
+                for file in [audio_path, "temp_audio.ogg", "temp_audio.wav"]:
+                    print(f"Audio file: {file}")
+                    if os.path.exists(file):
+                        os.remove(file)
+                return Response(str(twiml_response), content_type="audio/mpeg")
 
-        # Convert the TwiML response to a string
-        twiml_response_str = str(twiml_response)
-        print("TwiML response:", twiml_response_str)
-
-        # Return the response with the correct content type
-        return Response(twiml_response_str, content_type="text/xml")
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        return Response(str(e), status=500, content_type="text/plain")
+    # Fallback to text response
+    twiml_response.message(body=reply)
+    return Response(str(twiml_response), content_type="text/xml")
 
 
 @app.route("/execute_query", methods=["POST"])
 def execute_query_api():
-    if request.headers.get("x-api-key") != "abcdef": return jsonify({"error": "Unauthorized"}), 401
+    """API endpoint for direct query execution"""
+    if request.headers.get("x-api-key") != "abcdef":
+        return jsonify({"error": "Unauthorized"}), 401
     data = request.json
     query = data.get("query")
     if not query:
@@ -254,6 +756,5 @@ def execute_query_api():
         return jsonify({"error": "Query execution failed"}), 500
 
 
-# Run the Flask app
-if __name__ == "__main__":  # Add initial attendance entries
+if __name__ == "__main__":
     app.run(debug=True)
