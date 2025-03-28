@@ -9,6 +9,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from dotenv import load_dotenv
 import os
 from gtts import gTTS
+from twilio.rest import Client
 
 # Load environment variables
 load_dotenv()
@@ -26,6 +27,7 @@ DATABASE = "employees.db"
 # Speech-to-text recognizer
 recognizer = sr.Recognizer()
 
+client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 def execute_query(query):
     """Execute SQL query through API"""
@@ -59,6 +61,28 @@ def get_employees(phone_number):
         return response.json()
     else:
         print(f"Error: No employee found with this phone number {phone_number}")
+
+
+def get_employee_by_id(empId):
+    headers = {"x-api-key": "abcdef"}
+
+    try:
+        response = requests.post(  # POST method
+            API_URL+f"/employees/{empId}",
+            headers=headers
+        )
+
+        if response.status_code == 200:
+            employee_data = response.json()
+            print("Employee details:", employee_data)
+            return employee_data
+        elif response.status_code == 404:
+            print("Error: Employee not found")
+        else:
+            print(f"Error {response.status_code}: {response.text}")
+
+    except Exception as e:
+        print(f"Request failed: {str(e)}")
 
 
 def get_attendance(employee_id, date_to_mark):
@@ -218,6 +242,38 @@ def get_my_requests(employee_id, status="", request_type="all"):
         print("Error:", response.json())
         return None
 
+def get_request_by_id(request_id):
+    # params = {
+    #     "requesterEmpId": 123,          # Filter by employee who made request
+    #     "approverEmpId": 456,           # Filter by who needs to approve
+    #     "requestType": "LEAVE",         # "LEAVE" or "WFH"
+    #     "requestStatus": "PENDING",     # "PENDING", "APPROVED", or "REJECTED"
+    #     "fromDate": "2023-01-01",       # Start date range (YYYY-MM-DD)
+    #     "toDate": "2023-12-31"          # End date range (YYYY-MM-DD)
+    # }
+
+    headers = {"Content-Type": "application/json", "x-api-key": "abcdef"}
+
+    params = {
+         "id": request_id,
+    }
+    try:
+        response = requests.post(
+            API_URL+"/get-all-request",
+            params=params,
+            headers=headers,
+
+        )
+
+        if response.status_code == 200:
+            requests_data = response.json()
+            print("Fetched requests:", requests_data)
+            return requests_data
+        else:
+            print(f"Error {response.status_code}: {response.text}")
+
+    except Exception as e:
+        print(f"Request failed: {str(e)}")
 
 def update_request_status(request_id, new_status, user_id, api_key="abcdef"):
     """
@@ -444,6 +500,13 @@ def process_attendance_message(message):
     return status, date.strftime("%Y-%m-%d")
 
 
+def sendReply(client, reply, sender_number):
+    client.messages.create(
+        body=reply,
+        from_=TWILIO_WHATSAPP_NUMBER,
+        to=sender_number
+    )
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     """Main webhook handler for Twilio WhatsApp messages"""
@@ -594,7 +657,16 @@ def webhook():
                 print(f"Updated request status: {result}")
 
                 if result and result.get("success", True):
-                    reply = f"Request {request_id} approved successfully"
+                    req = get_request_by_id(request_id)
+                    reqType = req[0]["requestType"]
+                    from_date = req[0]["fromDate"]
+                    to_date = req[0]["toDate"]
+                    req_status = req[0]["requestStatus"]
+                    requesterEmpId = req[0]["requesterEmpId"]
+                    emp = get_employee_by_id(requesterEmpId)
+                    replyTo = emp['phone']
+                    reply = f"Request {request_id} of {reqType} from {from_date} to {to_date} {req_status}"
+                    sendReply(client, reply, "whatsapp:+91" + replyTo)
                 else:
                     reply = "Failed to approve request"
 
@@ -625,7 +697,7 @@ def webhook():
         parts = final_message.lower().split()
         employee_id = employee[0].get("id")
 
-        if len(parts) > 2:  # "accept request 123"
+        if len(parts) > 2:  # "reject request 123"
             try:
                 request_id = int(parts[2])
                 result = update_request_status(
@@ -636,7 +708,16 @@ def webhook():
                 print(f"Updated request status: {result}")
 
                 if result and result.get("success", True):
-                    reply = f"Request {request_id} rejected successfully"
+                    req = get_request_by_id(request_id)
+                    reqType = req[0]["requestType"]
+                    from_date = req[0]["fromDate"]
+                    to_date = req[0]["toDate"]
+                    req_status = req[0]["requestStatus"]
+                    requesterEmpId = req[0]["requesterEmpId"]
+                    emp = get_employee_by_id(requesterEmpId)
+                    replyTo = emp['phone']
+                    reply = f"Request {request_id} of {reqType} from {from_date} to {to_date} {req_status}"
+                    sendReply(client, reply, "whatsapp:+91" + replyTo)
                 else:
                     reply = "Failed to reject request"
 
@@ -684,6 +765,7 @@ def webhook():
                     f"To: {to_date}\n"
                     f"Request ID: {result.get('requestId')}"
                 )
+                sendReply(client, reply, "whatsapp:+917018198621")
             else:
                 reply = f"Failed to submit request: {result.get('error')}"
                 if "conflictDates" in result.get("details", {}):
