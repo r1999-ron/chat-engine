@@ -751,7 +751,7 @@ def webhook():
             reply = "Invalid format. Use: '[WFH/LEAVE] from yyyy-mm-dd to yyyy-mm-dd'"
         else:
             employee_id = employee[0].get("id")
-            employee_reports_to_id = employee[0].get("reports_to")
+            employee_reports_to_id = employee[0].get("reportsTo")
             employee_name = employee[0].get("name")
             emp_reports_to_response = get_employee_by_id(employee_reports_to_id)
             employee_reports_to_number = emp_reports_to_response['phone']
