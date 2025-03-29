@@ -751,6 +751,10 @@ def webhook():
             reply = "Invalid format. Use: '[WFH/LEAVE] from yyyy-mm-dd to yyyy-mm-dd'"
         else:
             employee_id = employee[0].get("id")
+            employee_reports_to_id = employee[0].get("reports_to")
+            employee_name = employee[0].get("name")
+            emp_reports_to_response = get_employee_by_id(employee_reports_to_id)
+            employee_reports_to_number = emp_reports_to_response['phone']
             result = create_request_approval(
                 emp_id=employee_id,
                 request_type=request_type,
@@ -765,7 +769,14 @@ def webhook():
                     f"To: {to_date}\n"
                     f"Request ID: {result.get('requestId')}"
                 )
-                sendReply(client, reply, "whatsapp:+917018198621")
+                reply_to_manager = (
+                    f"{request_type.capitalize()} request submitted by {employee_name}!\n"
+                    f"From: {from_date}\n"
+                    f"To: {to_date}\n"
+                    f"Request ID: {result.get('requestId')}")
+
+                print(f"employee reports to number {employee_reports_to_number}")
+                sendReply(client, reply_to_manager, f"whatsapp:+91{employee_reports_to_number}")
             else:
                 reply = f"Failed to submit request: {result.get('error')}"
                 if "conflictDates" in result.get("details", {}):
@@ -773,17 +784,21 @@ def webhook():
                 elif "leaves_taken" in result.get("details", {}):
                     remaining = 15 - result["details"]["leaves_taken"] - result["details"]["pending_leaves"]
                     reply += f"\nYou have only {remaining} leave days remaining"
+    elif final_message.strip().lower().startswith("find contact of "):
+        final_message = re.sub(r'(?i)find contact of', '', final_message)
 
+        query = f"SELECT name, email, phone FROM employee WHERE LOWER(name) LIKE \'%{final_message.lower()}%\' "
+        reply = execute_query(query)
     else:
-        if final_message.strip().lower().startswith("custom") and "manager" in employee[0].get("role", "").lower():
+        if final_message.strip().lower().startswith("custom employee") and employee[0].get("level", "0") >= 5:
             final_message = re.sub(r'(?i)custom', '', final_message)
             sql_message = (
                 f"you are a SQL expert for writing queries in sqlite3 python, always write query case insensitive, "
                 f"you have to only give the exact query for MySQL so that the result of yours,"
                 f"I can directly fire in DB. You have the Employee and Attendance table information: "
                 f"Employee with columns (id, name, email, phone, role (engineer, HR, tester, manager, and founder), "
-                f"level (integer 1,2,3), reportsTo (id of manager who is also an employee), skills (string)); "
-                f"Attendance with columns (id, empId, date(yyyy-mm-dd), status(PRESENT/ABSENT)).")
+                f"level (integer 1,2,3), clientCompany(string), location(string), employeeType(can have values A, B, C), reportsTo (id of manager who is also an employee), skills (string)); "
+                f"Attendance with columns (id, empId, date(yyyy-mm-dd), status(PRESENT/ABSENT)), requestId(integer value), Now tell me the query for - {final_message}")
             response_from_service_b = call_docuseek_api(sql_message, employee_type)
             query = re.search(r"```sql\s*(.*?)\s*```", response_from_service_b or "", re.DOTALL)
             if query:
@@ -791,9 +806,42 @@ def webhook():
                 query = " ".join(query.split())
                 if "notsure" not in query.lower():
                     result = execute_query(query)
-                    reply = f"Your result is \n {result}" if result else "Query execution failed"
+                    if result:
+                        formatted_response = "Employee Details:\n" + "\n".join(
+                            f"• {emp['name']} ({emp['clientCompany']})"
+                            f"\n  📧 {emp['email']}"
+                            f"\n  📞 {emp['phone']}"
+                            f"\n  📍 {emp['location']} (Level {emp['level']})"
+                            for emp in result
+                        )
+                    else:
+                        formatted_response = "No employee data found"
+                    reply = f"{formatted_response}"
             else:
                 reply = "Could not generate proper SQL query"
+        elif final_message.strip().lower().startswith("custom") and employee[0].get("level", "0") >= 5:
+                final_message = re.sub(r'(?i)custom', '', final_message)
+                sql_message = (
+                    f"you are a SQL expert for writing queries in sqlite3 python, always write query case insensitive, "
+                    f"you have to only give the exact query for MySQL so that the result of yours,"
+                    f"I can directly fire in DB. You have the Employee and Attendance table information: "
+                    f"Employee with columns (id, name, email, phone, role (engineer, HR, tester, manager, and founder), "
+                    f"level (integer 1,2,3), clientCompany(string), location(string), employeeType(can have values A, B, C), reportsTo (id of manager who is also an employee), skills (string)); "
+                    f"Attendance with columns (id, empId, date(yyyy-mm-dd), status(PRESENT/ABSENT)), requestId(integer value), Now tell me the query for - {final_message}")
+                response_from_service_b = call_docuseek_api(sql_message, employee_type)
+                query = re.search(r"```sql\s*(.*?)\s*```", response_from_service_b or "", re.DOTALL)
+                if query:
+                    query = query.group(1).strip()
+                    query = " ".join(query.split())
+                    if "notsure" not in query.lower():
+                        result = execute_query(query)
+                        if result:
+                            formatted_response = result
+                        else:
+                            formatted_response = "No employee data found"
+                        reply = f"{formatted_response}"
+                else:
+                    reply = "Could not generate proper SQL query"
         else:
             response_from_service_b = call_docuseek_api(final_message, employee_type)
             print("Response from service:", response_from_service_b)
