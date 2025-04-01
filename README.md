@@ -21,6 +21,21 @@ This is a WhatsApp-based employee management system that allows employees and ma
 - Different features available based on employee level
 - Manager approval workflows
 
+## 🔔 Key Notification Feature: Manager Alerts
+
+**Automated Manager Notifications**  
+When an employee submits a leave/WFH request, the system automatically:
+1. Sends an immediate WhatsApp notification to their manager
+2. Includes all request details:
+   - Employee name
+   - Request type (Leave/WFH)
+   - Date range
+   - Request ID
+3. Provides quick-action instructions:
+   - "Reply 'accept request [ID]' to approve"
+   - "Reply 'reject request [ID]' to deny"
+
+
 ## Technical Architecture
 - **Flask** web application serving as the backend
 - **Twilio WhatsApp API** integration
