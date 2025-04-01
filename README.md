@@ -17,10 +17,6 @@ This is a WhatsApp-based employee management system that allows employees and ma
 - Find contact details of colleagues
 - Custom employee searches (for HR/managers)
 
-### Voice Support:
-- Send voice messages instead of typing
-- Receive audio responses
-
 ### Role-Based Access:
 - Different features available based on employee level
 - Manager approval workflows
@@ -111,6 +107,7 @@ The system provides these API endpoints:
 
 ## Limitations
 - Currently supports **English language only**
+- Currently text-only interface (no voice support)
 - Voice recognition accuracy may vary
 - Requires a **stable internet connection**
 
